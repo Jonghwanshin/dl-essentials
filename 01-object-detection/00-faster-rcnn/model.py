@@ -8,16 +8,46 @@
 """
 import torch
 import torch.nn as nn
+from torch import Tensor
 from torchvision.models import resnet50
 
 class RoiPooling(nn.Module):
     """
-    Region of Interest Pooling
+    Region of Interest Pooling uses max pooling to convert the features inside any valid region of interest
+    into a small feature map with a fixed spatial extent of H x W (e.g. 7 x 7).
+
+    where H & W are layer hyper-parameters that are independent of any particular ROI.
+
+    In this paper, an RoI is a rectangular window into a conv feature map.
+    Each RoI is defined by a four-tuple (r, c, h, w) that specifies its top-left corner (r, c) and its height and width (h, w).
+    RoI max pooling works by dividing the h x w RoI window into H x W grid of sub-windows of approximate size
+    h/H x w/W and then max-pooling the values in each sub window into the corresponding output grid cell.
+
+    Pooling is applied independently to each feature map channel, as in standard max pooling.
+
+    Reference
+    - Source code for torchvison.ops.roi_pool: https://pytorch.org/vision/0.17/_modules/torchvision/ops/roi_pool.html
+    - Fast-RCNN paper (https://arxiv.org/pdf/1504.08083.pdf)
+    - "How does a pytorch function work?" - Stack overflow (https://stackoverflow.com/questions/73938616/how-does-a-pytorch-function-such-as-roipool-work)
     """
-    def __init__(self):
+    def __init__(self, output_size, spatial_size: float = 1.0):
         super().__init__()
-    def forward(self, x):
-        return x
+        self.output_size = output_size
+        self.spatial_size = spatial_size
+
+    def forward(self, input, boxes) -> Tensor:
+        """
+        takes the original feature map(input) and list of boxes(boxes)
+        if output size for each boxes is described(output_size), it will return the pooled feature map for each box
+        or it will return the pooled feature map for each box with scale of spatial_size
+        Args:
+            input: input tensor of shape (N, C, H, W)
+            boxes: the box coordinates in (x1, y1, x2, y2) format in the input image
+            output_size: the size of the output after the pooling
+            spatial_scale: a scaling factor that maps the input coordinates to the box coordinates
+        """
+        output = nn.MaxPool2d(input, self.output_size, stride=1)
+        return output
 
 class RPN(nn.Module):
     """
@@ -59,24 +89,21 @@ class FasterRCNN(nn.Module):
         self.rpn = RPN()
         # RoI Pooling
         self.roi_pooling = RoiPooling()
-        
+        # non maximum suppression
         self._initialize_weights()
     def forward(self, x):
         # Backbone
         x = self.backbone(x)
         # Region Proposal Network
-        rpn = self.rpn(x)
+        cls_score, bbox_pred = self.rpn(x)
         # RoI Pooling
-        roi = self.roi_pooling(x, rpn)
+        roi = self.roi_pooling(x, bbox_pred)
         # Fully Connected Layer
         fc = self.fc(roi)
         # Classification Layer
         cls = self.cls(fc)
         # Regression Layer
         reg = self.reg(fc)
-
-        # calculate loss
-
         return cls, reg
     def _initialize_weights(self):
         for m in self.modules():
